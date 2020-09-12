@@ -58,7 +58,7 @@ static DEFINE_MUTEX(ebbchar_mutex);  /// A macro that is used to declare a new m
  *  time and that it can be discarded and its memory freed up after that point.
  *  @return returns 0 if successful
  */
-static int __init crypto_init(void){
+static int __init crypto_aelpp_init(void){
    printk(KERN_INFO "Crypto_aelpp: Initializing the Crypto\n");
 
    // Try to dynamically allocate a major number for the device -- more difficult but worth it
@@ -98,7 +98,7 @@ static int __init crypto_init(void){
  *  Similar to the initialization function, it is static. The __exit macro notifies that if this
  *  code is used for a built-in driver (not a CRYPTO) that this function is not required.
  */
-static void __exit crypto_exit(void){
+static void __exit crypto_aelpp_exit(void){
    device_destroy(ebbcharClass, MKDEV(majorNumber, 0));     // remove the device
    class_unregister(ebbcharClass);                          // unregister the device class
    class_destroy(ebbcharClass);                             // remove the device class
@@ -177,5 +177,5 @@ static int dev_release(struct inode *inodep, struct file *filep){
  *  identify the initialization function at insertion time and the cleanup function (as
  *  listed above)
  */
-module_init(ebbchar_init);
-module_exit(ebbchar_exit);
+module_init(crypto_aelpp_init);
+module_exit(crypto_aelpp_exit);
