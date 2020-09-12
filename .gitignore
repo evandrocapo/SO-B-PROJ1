@@ -1,0 +1,11 @@
+.cache.mk
+.crypto_aelpp.ko.cmd
+.crypto_aelpp.mod.o.cmd
+.crypto_aelpp.o.cmd
+crypto_aelpp.ko
+crypto_aelpp.mod.c
+crypto_aelpp.mod.o
+crypto_aelpp.o
+Module.symvers
+modules.order
+.tmp_versions/
