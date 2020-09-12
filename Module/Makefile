@@ -1,8 +1,7 @@
-obj-m+=crypto.o
- 
+obj-m+=crypto_aelpp.o
+
 all:
- make -C /lib/modules/$(shell uname -r)/build/ M=$(PWD) modules
- $(CC) crypto.c -o test
+	make -C /lib/modules/$(shell uname -r)/build M=$(PWD) modules
+
 clean:
- make -C /lib/modules/$(shell uname -r)/build/ M=$(PWD) clean
- rm test
+	make -C /lib/modules/$(shell uname -r)/build M=$(PWD) clean
