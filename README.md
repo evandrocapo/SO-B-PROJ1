@@ -2,11 +2,22 @@
 
 ## Summary
 
-1 - Examples
+1 - Prerequisites
 
-2 - Module
+2 - Examples
 
-3 - Program
+3 - Module
+
+4 - Program
+
+### Prerequisites
+
+```
+sudo apt-get update
+sudo apt-get install libncurses-dev flex bison openssl libssl-dev dkms libelf-dev libudev-dev libpci-dev libiberty-dev autoconf
+sudo apt-get install linux-headers-$(uname -r)
+sudo apt-get install linux-source
+```
 
 ### Examples
 
