@@ -1,11 +1,11 @@
 /**
- * xxxxxxxx - Agostinho
+ * 16507915 - Agostinho Sanches de Araujo
  * 16023905 - Evandro Douglas Capovilla Junior
  * xxxxxxxx - Lucas
  * xxxxxxxx - Pedro Caccavaro
- * xxxxxxxx - Pedro 
+ * xxxxxxxx - Pedro
  */
- 
+
 #include <linux/init.h>           // Macros used to mark up functions e.g. __init __exit
 #include <linux/module.h>         // Core header for loading LKMs into the kernel
 #include <linux/device.h>         // Header to support the kernel Driver Model
@@ -13,31 +13,39 @@
 #include <linux/fs.h>             // Header for the Linux file system support
 #include <linux/uaccess.h>          // Required for the copy to user function
 #include <linux/mutex.h>	         /// Required for the mutex functionality
-#define  DEVICE_NAME "crypto_aelpp"    ///< The device will appear at /dev/ebbchar using this value
+#include <linux/scatterlist.h>
+#include <asm/uaccess.h>
+#include <linux/crypto.h>
+#include <crypto/internal/hash.h>
+#include <crypto/internal/skcipher.h>
+#define  DEVICE_NAME "crypto_aelpp"    ///< The device will appear at  using this value
 #define  CLASS_NAME  "cpt_aelpp"        ///< The device class -- this is a character device driver
- 
+#define SHA1_LENGTH (40)
+#define SHA256_LENGTH (256/8)
 MODULE_LICENSE("GPL");            ///< The license type -- this affects available functionality
 MODULE_AUTHOR("Agostinho Sanches/Evandro Capovilla/Lucas Tenani/Pedro Caccavaro/Pedro Catalini");    ///< The author -- visible when you use modinfo
 MODULE_DESCRIPTION("A simple Linux crypt driver");  ///< The description -- see modinfo
 MODULE_VERSION("1.0");            ///< A version number to inform users
 
-static int    majorNumber;                  ///< Stores the device number -- determined automatically
-static char   message[256] = {0};           ///< Memory for the string that is passed from userspace
+
+static int    majorNumber;                  ///< Stores the device number
+static char   message[256] = {0};           ///< Memory for the string that
 static short  size_of_message;              ///< Used to remember the size of the string stored
 static int    numberOpens = 0;              ///< Counts the number of times the device is opened
 static struct class*  ebbcharClass  = NULL; ///< The device-driver class struct pointer
 static struct device* ebbcharDevice = NULL; ///< The device-driver device struct pointer
- 
-// The prototype functions for the character driver -- must come before the struct definition
+static char *iv = "blah";
+static char *key = "blah";
+
+static int makeHash(char *data);
+
 static int     dev_open(struct inode *, struct file *);
 static int     dev_release(struct inode *, struct file *);
 static ssize_t dev_read(struct file *, char *, size_t, loff_t *);
 static ssize_t dev_write(struct file *, const char *, size_t, loff_t *);
- 
-/** @brief Devices are represented as file structure in the kernel. The file_operations structure from
- *  /linux/fs.h lists the callback functions that you wish to associated with your file operations
- *  using a C99 syntax structure. char devices usually implement open, read, write and release calls
- */
+
+
+
 static struct file_operations fops =
 {
    .open = dev_open,
@@ -47,17 +55,15 @@ static struct file_operations fops =
 };
 
 
-static DEFINE_MUTEX(ebbchar_mutex);  /// A macro that is used to declare a new mutex that is visible in this file
-                                     /// results in a semaphore variable ebbchar_mutex with value 1 (unlocked)
-                                     /// DEFINE_MUTEX_LOCKED() results in a variable with value 0 (locked)
+static DEFINE_MUTEX(ebbchar_mutex);
 
 
-/** @brief The CRYPTO initialization function
- *  The static keyword restricts the visibility of the function to within this C file. The __init
- *  macro means that for a built-in driver (not a CRYPTO) the function is only used at initialization
- *  time and that it can be discarded and its memory freed up after that point.
- *  @return returns 0 if successful
- */
+module_param(iv, charp, 0000);
+MODULE_PARM_DESC(iv, "Initialization Vector");
+module_param(key, charp, 0000);
+MODULE_PARM_DESC(key, "Key to AES");
+
+
 static int __init crypto_aelpp_init(void){
    printk(KERN_INFO "Crypto_aelpp: Initializing the Crypto\n");
 
@@ -68,7 +74,9 @@ static int __init crypto_aelpp_init(void){
       return majorNumber;
    }
    printk(KERN_INFO "Crypto_aelpp: registered correctly with major number %d\n", majorNumber);
- 
+   printk(KERN_INFO "Crypto_aelpp: Key is: %s\n", key);
+   printk(KERN_INFO "Crypto_aelpp: IV is: %s\n", iv);
+
    // Register the device class
    ebbcharClass = class_create(THIS_MODULE, CLASS_NAME);
    if (IS_ERR(ebbcharClass)){                // Check for error and clean up if there is
@@ -77,7 +85,7 @@ static int __init crypto_aelpp_init(void){
       return PTR_ERR(ebbcharClass);          // Correct way to return an error on a pointer
    }
    printk(KERN_INFO "Crypto_aelpp: device class registered correctly\n");
- 
+
    // Register the device driver
    ebbcharDevice = device_create(ebbcharClass, NULL, MKDEV(majorNumber, 0), NULL, DEVICE_NAME);
    if (IS_ERR(ebbcharDevice)){               // Clean up if there is an error
@@ -94,10 +102,7 @@ static int __init crypto_aelpp_init(void){
    return 0;
 }
 
-/** @brief The CRYPTO cleanup function
- *  Similar to the initialization function, it is static. The __exit macro notifies that if this
- *  code is used for a built-in driver (not a CRYPTO) that this function is not required.
- */
+
 static void __exit crypto_aelpp_exit(void){
    device_destroy(ebbcharClass, MKDEV(majorNumber, 0));     // remove the device
    class_unregister(ebbcharClass);                          // unregister the device class
@@ -107,14 +112,11 @@ static void __exit crypto_aelpp_exit(void){
    printk(KERN_INFO "Crypto_aelpp: Goodbye from the LKM!\n");
 }
 
-/** @brief The device open function that is called each time the device is opened
- *  This will only increment the numberOpens counter in this case.
- *  @param inodep A pointer to an inode object (defined in linux/fs.h)
- *  @param filep A pointer to a file object (defined in linux/fs.h)
- */
+
+
+
 static int dev_open(struct inode *inodep, struct file *filep){
-    if(!mutex_trylock(&ebbchar_mutex)){    /// Try to acquire the mutex (i.e., put the lock on/down)
-                                          /// returns 1 if successful and 0 if there is contention
+    if(!mutex_trylock(&ebbchar_mutex)){    /// Try to acquire the mutex returns 1 successful and 0
       printk(KERN_ALERT "Crypto_aelpp: Device in use by another process");
       return -EBUSY;
    }
@@ -123,59 +125,114 @@ static int dev_open(struct inode *inodep, struct file *filep){
    return 0;
 }
 
-/** @brief This function is called whenever the device is being written to from user space i.e.
- *  data is sent to the device from the user. The data is copied to the message[] array in this
- *  LKM using the sprintf() function along with the length of the string.
- *  @param filep A pointer to a file object
- *  @param buffer The buffer to that contains the string to write to the device
- *  @param len The length of the array of data that is being passed in the const char buffer
- *  @param offset The offset if required
- */
+
+static int makeHash(char *data){
+	char * plaintext = data;
+	char hash_sha1[SHA1_LENGTH];
+	struct crypto_shash *sha1;
+	struct shash_desc *shash;
+	int i;
+	char str[SHA1_LENGTH*2 + 1];
+
+	sha1 = crypto_alloc_shash("sha1", 0, 0);
+	if (IS_ERR(sha1)){
+		printk(KERN_INFO "Crypto_aelpp: Fail alloc_shash\n");
+		return -1;
+	}
+
+	shash = kmalloc(sizeof(struct shash_desc) + crypto_shash_descsize(sha1),GFP_KERNEL);
+	if (!shash){
+		printk(KERN_INFO "Crypto_aelpp: Fail kmalloc\n");
+		return -ENOMEM;
+	}
+
+	shash->tfm = sha1;
+	shash->flags = 0;
+
+	if(crypto_shash_init(shash)){
+		printk(KERN_INFO "Crypto_aelpp: Fail shash_init\n");
+		return -1;
+	}
+
+	if(crypto_shash_update(shash, plaintext, strlen(plaintext))){
+		printk(KERN_INFO "Crypto_aelpp: Fail shash_update\n");
+		return -1;
+	}
+
+	if(crypto_shash_final(shash, hash_sha1)){
+		printk(KERN_INFO "Crypto_aelpp: Fail shash_final\n");
+		return -1;
+	}
+
+	/*kfree(shash);
+	crypto_free_shash(sha1);
+	*/
+
+	printk(KERN_INFO "Crypto_aelpp: sha1 Plaintext: %s\n", plaintext);
+	for (i = 0; i < SHA256_LENGTH ; i++)
+		sprintf(&str[i*2],"%02x", (unsigned char)hash_sha1[i]);
+	str[i*2] = 0;
+	printk(KERN_INFO "Crypto_aelpp: sha1 Result: %s\n", str);
+	strncpy(message,str,strlen(str));
+	size_of_message = strlen(str);
+	return 0;
+}
+
+
 static ssize_t dev_write(struct file *filep, const char *buffer, size_t len, loff_t *offset){
-   sprintf(message, "%s(%zu letters)", buffer, len);   // appending received string with its length
-   size_of_message = strlen(message);                 // store the length of the stored message
-   printk(KERN_INFO "Crypto_aelpp: Received %zu characters from the user\n", len);
+   char *data,operation;
+   char space =' ';
+   int ret;
+
+   copy_from_user(message,buffer,len);
+   operation = *message;
+   data = strchr(message,space);
+   data = data+1;
+   printk(KERN_INFO "Crypto_aelpp: Received - Operation: %c Data: %s\n", operation, data);
+
+   switch(operation){
+		case 'c':
+			printk(KERN_INFO "Crypto_aelpp: Lets cipher\n");
+			break;
+		case 'd':
+			printk(KERN_INFO "Crypto_aelpp: Lets decipher\n");
+			break;
+		case 'h':
+			ret = makeHash(data);
+			break;
+	}
+
    return len;
 }
 
-/** @brief This function is called whenever device is being read from user space i.e. data is
- *  being sent from the device to the user. In this case is uses the copy_to_user() function to
- *  send the buffer string to the user and captures any errors.
- *  @param filep A pointer to a file object (defined in linux/fs.h)
- *  @param buffer The pointer to the buffer to which this function writes the data
- *  @param len The length of the b
- *  @param offset The offset if required
- */
+
+
+
 static ssize_t dev_read(struct file *filep, char *buffer, size_t len, loff_t *offset){
    int error_count = 0;
    // copy_to_user has the format ( * to, *from, size) and returns 0 on success
    error_count = copy_to_user(buffer, message, size_of_message);
- 
+
    if (error_count==0){            // if true then have success
-      printk(KERN_INFO "EBBChar: Sent %d characters to the user\n", size_of_message);
+      printk(KERN_INFO "Crypto_aelpp: Sent %d characters to the user\n", size_of_message);
       return (size_of_message=0);  // clear the position to the start and return 0
    }
    else {
-      printk(KERN_INFO "EBBChar: Failed to send %d characters to the user\n", error_count);
+      printk(KERN_INFO "Crypto_aelpp: Failed to send %d characters to the user\n", error_count);
       return -EFAULT;              // Failed -- return a bad address message (i.e. -14)
    }
 }
 
-/** @brief The device release function that is called whenever the device is closed/released by
- *  the userspace program
- *  @param inodep A pointer to an inode object (defined in linux/fs.h)
- *  @param filep A pointer to a file object (defined in linux/fs.h)
- */
+
+
+
 static int dev_release(struct inode *inodep, struct file *filep){
    mutex_unlock(&ebbchar_mutex);                      // Releases the mutex (i.e., the lock goes up)
    printk(KERN_INFO "Crypto_aelpp: Device successfully closed\n");
    return 0;
 }
 
- 
-/** @brief A module must use the module_init() module_exit() macros from linux/init.h, which
- *  identify the initialization function at insertion time and the cleanup function (as
- *  listed above)
- */
+
+
 module_init(crypto_aelpp_init);
 module_exit(crypto_aelpp_exit);

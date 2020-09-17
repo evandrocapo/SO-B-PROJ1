@@ -3,7 +3,7 @@
  * 16023905 - Evandro Douglas Capovilla Junior
  * xxxxxxxx - Lucas
  * xxxxxxxx - Pedro Caccavaro
- * xxxxxxxx - Pedro 
+ * xxxxxxxx - Pedro
  */
 
 #include<stdio.h>
@@ -17,33 +17,58 @@
 static char receive[BUFFER_LENGTH];     ///< The receive buffer from the LKM
 
 int main(){
-   int ret, fd;
-   char stringToSend[BUFFER_LENGTH];
-   printf("Starting device crypto_aelpp...\n");
-   fd = open("/dev/crypto_aelpp", O_RDWR);             // Open the device with read/write access
-   if (fd < 0){
-      perror("Failed to open the device...");
-      return errno;
-   }
-   printf("Type in a short string to send to the crypto_aelpp module:\n");
-   scanf("%[^\n]%*c", stringToSend);                // Read in a string (with spaces)
-   printf("Writing message to the device [%s].\n", stringToSend);
-   ret = write(fd, stringToSend, strlen(stringToSend)); // Send the string to the LKM
-   if (ret < 0){
-      perror("Failed to write the message to the device.");
-      return errno;
-   }
+	int ret, fd;
+	char stringToSend[BUFFER_LENGTH], input[BUFFER_LENGTH - 10];
+	char operation;
+	printf("[+] Starting device crypto_aelpp...\n");
+	fd = open("/dev/crypto_aelpp", O_RDWR);
+	if (fd < 0){
+		perror("[!] Failed to open the device...");
+		return errno;
+	}
 
-   printf("Press ENTER to read back from the device...\n");
-   getchar();
+	printf("[+] Options: (c)ipher (d)ecipher (h)ash\n[+] Select the operation: ");
+	operation = getchar();
+	switch(operation){
+		case 'c':
+			printf("[+] Input String: ");
+			getchar();
+			scanf("%[^\n]%*c", input);
+			strcpy(stringToSend,"c ");
+			strcat(stringToSend,input);
+			break;
+		case 'd':
+			printf("[+] Input String: ");
+			getchar();
+			scanf("%[^\n]%*c", input);
+			strcpy(stringToSend,"d ");
+			strcat(stringToSend,input);
+			break;
+		case 'h':
+			printf("[+] Input String: ");
+			getchar();
+			scanf("%[^\n]%*c", input);
+			strcpy(stringToSend,"h ");
+			strcat(stringToSend,input);
+			break;
+		default:
+			printf("[!] Invalid operation\n");
+			return 0;
+	}
+	ret = write(fd, stringToSend, strlen(stringToSend)); // Send the string to the LKM
+	if (ret < 0){
+		perror("[!] Failed to write the message to the device.");
+		return errno;
+	}
+	printf("[+] Press ENTER to receive your ciphertext...\n");
+	getchar();
 
-   printf("Reading from the device...\n");
-   ret = read(fd, receive, BUFFER_LENGTH);        // Read the response from the LKM
-   if (ret < 0){
-      perror("Failed to read the message from the device.");
-      return errno;
-   }
-   printf("The received message is: [%s]\n", receive);
-   printf("End of the program\n");
-   return 0;
+	ret = read(fd, receive, BUFFER_LENGTH);        // Read the response from the LKM
+	if (ret < 0){
+		perror("[!] Failed to read the message from the device.");
+		return errno;
+	}
+	printf("[+] Ciphertext: %s\n", receive);
+	printf("[-] End of the program\n");
+	return 0;
 }
