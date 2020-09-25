@@ -1,8 +1,8 @@
 /**
- * xxxxxxxx - Agostinho
+ * 16507915 - Agostinho Sanches de Araujo
  * 16023905 - Evandro Douglas Capovilla Junior
- * xxxxxxxx - Lucas
- * xxxxxxxx - Pedro Caccavaro
+ * 16105744 - Lucas Tenani Felix Martins
+ * 16124679 - Pedro Andrade Caccavaro
  * xxxxxxxx - Pedro
  */
 

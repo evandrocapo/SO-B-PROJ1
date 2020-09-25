@@ -1,8 +1,8 @@
 /**
  * 16507915 - Agostinho Sanches de Araujo
  * 16023905 - Evandro Douglas Capovilla Junior
- * xxxxxxxx - Lucas
- * xxxxxxxx - Pedro Caccavaro
+ * 16105744 - Lucas Tenani Felix Martins
+ * 16124679 - Pedro Andrade Caccavaro
  * xxxxxxxx - Pedro
  */
 
@@ -18,10 +18,18 @@
 #include <linux/crypto.h>
 #include <crypto/internal/hash.h>
 #include <crypto/internal/skcipher.h>
+#include <linux/mm.h>
+#include <linux/moduleparam.h>
+#define SYMMETRIC_KEY_LENGTH 32
+#define CIPHER_BLOCK_SIZE 16
 #define  DEVICE_NAME "crypto_aelpp"    ///< The device will appear at  using this value
 #define  CLASS_NAME  "cpt_aelpp"        ///< The device class -- this is a character device driver
+#define ENCRYPT   0
+#define DECRYPT   1
 #define SHA1_LENGTH (40)
 #define SHA256_LENGTH (256/8)
+#define DATA_SIZE       16
+#define FILL_SG(sg,ptr,len)     do { (sg)->page = virt_to_page(ptr); (sg)->offset = offset_in_page(ptr); (sg)->length = len; } while (0)
 MODULE_LICENSE("GPL");            ///< The license type -- this affects available functionality
 MODULE_AUTHOR("Agostinho Sanches/Evandro Capovilla/Lucas Tenani/Pedro Caccavaro/Pedro Catalini");    ///< The author -- visible when you use modinfo
 MODULE_DESCRIPTION("A simple Linux crypt driver");  ///< The description -- see modinfo
@@ -39,6 +47,10 @@ static char *key = "blah";
 
 static int makeHash(char *data);
 
+static int makeEncryptOrDecrypt(char* input, int action)
+
+static void hexdump(unsigned char *buf, unsigned int len);
+
 static int     dev_open(struct inode *, struct file *);
 static int     dev_release(struct inode *, struct file *);
 static ssize_t dev_read(struct file *, char *, size_t, loff_t *);
@@ -53,6 +65,23 @@ static struct file_operations fops =
    .write = dev_write,
    .release = dev_release,
 };
+
+struct tcrypt_result 
+{
+ struct completion completion;
+ int err;
+};
+struct skcipher_def 
+{
+   struct scatterlist sg;
+   struct crypto_skcipher * tfm;
+   struct skcipher_request * req;
+   struct tcrypt_result result;
+   char * scratchpad;
+   char * ciphertext;
+   char * ivdata;
+};
+static struct skcipher_def sk;
 
 
 static DEFINE_MUTEX(ebbchar_mutex);
@@ -192,10 +221,10 @@ static ssize_t dev_write(struct file *filep, const char *buffer, size_t len, lof
 
    switch(operation){
 		case 'c':
-			printk(KERN_INFO "Crypto_aelpp: Lets cipher\n");
+         ret = makeEncryptOrDecrypt(data, ENCRYPT);
 			break;
 		case 'd':
-			printk(KERN_INFO "Crypto_aelpp: Lets decipher\n");
+         ret = makeEncryptOrDecrypt(data, DECRYPT);
 			break;
 		case 'h':
 			ret = makeHash(data);
@@ -204,8 +233,6 @@ static ssize_t dev_write(struct file *filep, const char *buffer, size_t len, lof
 
    return len;
 }
-
-
 
 
 static ssize_t dev_read(struct file *filep, char *buffer, size_t len, loff_t *offset){
@@ -223,8 +250,147 @@ static ssize_t dev_read(struct file *filep, char *buffer, size_t len, loff_t *of
    }
 }
 
+static void test_skcipher_finish(struct skcipher_def * sk)
+{
+   if (sk->tfm)
+      crypto_free_skcipher(sk->tfm);
+   if (sk->req)
+      skcipher_request_free(sk->req);
+   if (sk->ivdata)
+      kfree(sk->ivdata);
+   if (sk->scratchpad)
+      kfree(sk->scratchpad);
+   if (sk->ciphertext)
+      kfree(sk->ciphertext);
+}
+static int test_skcipher_result(struct skcipher_def * sk, int rc)
+{
+   switch (rc) 
+   {
+      case 0:
+      break;
+      case -EINPROGRESS:
+      case -EBUSY:
+         rc = wait_for_completion_interruptible(
+         &sk->result.completion);
+      if (!rc && !sk->result.err) 
+      {
+         reinit_completion(&sk->result.completion);
+         break;
+      }
+      default:
+         printk(KERN_INFO "Crypto_aelpp: skcipher encrypt returned with %d result %d\n",
+         rc, sk->result.err);
+      break;
+   }
+   init_completion(&sk->result.completion);
+   return rc;
+}
+static void test_skcipher_callback(struct crypto_async_request *req, int error)
+{
+   struct tcrypt_result *result = req->data;
+   if (error == -EINPROGRESS)
+      return;
+   result->err = error;
+   complete(&result->completion);
+   printk(KERN_INFO "Crypto_aelpp: Request finished successfully\n");
+}
 
+static int makeEncryptOrDecrypt(char * input, int action)
+{
+   char * plaintext = input;
+   char * password = key;
 
+   sk.tfm = NULL;
+   sk.req = NULL;
+   sk.scratchpad = NULL;
+   sk.ciphertext = NULL;
+   sk.ivdata = iv;
+
+   int ret = -1;
+   unsigned char key[SYMMETRIC_KEY_LENGTH];
+   if (!sk->tfm) 
+   {
+      sk->tfm = crypto_alloc_skcipher("cbc-aes-aesni", 0, 0);
+      if (IS_ERR(sk->tfm)) 
+      {
+         printk(KERN_INFO "Crypto_aelpp: could not allocate skcipher handle\n");
+         return PTR_ERR(sk->tfm);
+      }  
+   }
+   if (!sk->req) 
+   {
+      sk->req = skcipher_request_alloc(sk->tfm, GFP_KERNEL);
+      if (!sk->req) 
+      {
+         printk(KERN_INFO "Crypto_aelpp: could not allocate skcipher request\n");
+         ret = -1;
+         goto out;
+      }
+   }
+   skcipher_request_set_callback(sk->req, CRYPTO_TFM_REQ_MAY_BACKLOG, test_skcipher_callback, &sk->result);
+   /* clear the key */
+   memset((void*)key,'\0', SYMMETRIC_KEY_LENGTH);
+
+   sprintf((char*)key,"%s",password);
+
+   /* AES 256 with given symmetric key */
+   if (crypto_skcipher_setkey(sk->tfm, key, SYMMETRIC_KEY_LENGTH)) 
+   {
+      printk(KERN_INFO "Crypto_aelpp: key could not be set\n");
+      ret = -1;
+      goto out;
+   }
+   printk(KERN_INFO "Crypto_aelpp: Symmetric key: %s\n", key);
+   printk(KERN_INFO "Crypto_aelpp: Plaintext: %s\n", plaintext);
+   if (!sk->ivdata) 
+   {
+      /* see https://en.wikipedia.org/wiki/Initialization_vector */
+      sk->ivdata = kmalloc(CIPHER_BLOCK_SIZE, GFP_KERNEL);
+      if (!sk->ivdata) 
+      {
+         printk(KERN_INFO "Crypto_aelpp: could not allocate ivdata\n");
+         goto out;
+      }
+      get_random_bytes(sk->ivdata, CIPHER_BLOCK_SIZE);
+   }
+   if (!sk->scratchpad) 
+   {
+      /* The text to be encrypted */
+      sk->scratchpad = kmalloc(CIPHER_BLOCK_SIZE, GFP_KERNEL);
+      if (!sk->scratchpad) 
+      {
+         printk(KERN_INFO "Crypto_aelpp: could not allocate scratchpad\n");
+         goto out;
+      }
+   }
+   sprintf((char*)sk->scratchpad,"%s",plaintext);
+   sg_init_one(&sk->sg, sk->scratchpad, CIPHER_BLOCK_SIZE);
+   skcipher_request_set_crypt(sk->req, &sk->sg, &sk->sg, CIPHER_BLOCK_SIZE, sk->ivdata);
+
+   init_completion(&sk->result.completion);
+
+   switch(action)
+   {
+      case ENCRYPT:
+         ret = crypto_skcipher_encrypt(sk->req);
+         ret = test_skcipher_result(sk, ret);
+         if (ret)
+            printk(KERN_INFO "Crypto_aelpp: Encryption request successful\n \n");
+         return ret;
+
+      case DECRYPT:
+         ret = crypto_skcipher_decrypt(sk->req);
+         ret = test_skcipher_result(sk, ret);
+         if (ret)
+            printk(KERN_INFO "Crypto_aelpp: Decryption request successful\n \n");
+         return ret;
+
+      default:
+         return -1;
+
+   }
+}
 
 static int dev_release(struct inode *inodep, struct file *filep){
    mutex_unlock(&ebbchar_mutex);                      // Releases the mutex (i.e., the lock goes up)
