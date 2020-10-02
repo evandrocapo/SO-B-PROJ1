@@ -1,4 +1,4 @@
 #!/bin/bash
 echo "Stoping module!"
-sudo rmmod crypto_aelpp.ko
+sudo rmmod cryptodev.ko
 lsmod
