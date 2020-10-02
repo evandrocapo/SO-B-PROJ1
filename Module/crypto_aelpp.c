@@ -14,10 +14,12 @@
 #include <linux/uaccess.h>          // Required for the copy to user function
 #include <linux/mutex.h>	         /// Required for the mutex functionality
 #include <linux/scatterlist.h>
-#include <asm/uaccess.h>
+#include <asm/uaccess.h> // é necessario ?
 #include <linux/crypto.h>
 #include <crypto/internal/hash.h>
-#include <crypto/internal/skcipher.h>
+#include <crypto/internal/skcipher.h> // é necessario ?
+#include <crypto/skcipher.h>
+
 #define  DEVICE_NAME "crypto_aelpp"    ///< The device will appear at  using this value
 #define  CLASS_NAME  "cpt_aelpp"        ///< The device class -- this is a character device driver
 #define SHA1_LENGTH (40)
@@ -34,17 +36,23 @@ static short  size_of_message;              ///< Used to remember the size of th
 static int    numberOpens = 0;              ///< Counts the number of times the device is opened
 static struct class*  ebbcharClass  = NULL; ///< The device-driver class struct pointer
 static struct device* ebbcharDevice = NULL; ///< The device-driver device struct pointer
-static char *iv = "blah";
-static char *key = "blah";
+
 
 static int makeHash(char *data);
+static int criptografar(char *data);
 
 static int     dev_open(struct inode *, struct file *);
 static int     dev_release(struct inode *, struct file *);
 static ssize_t dev_read(struct file *, char *, size_t, loff_t *);
 static ssize_t dev_write(struct file *, const char *, size_t, loff_t *);
 
+struct crypto_skcipher *tfm;
+struct skcipher_request *req = NULL;
+struct scatterlist sg;
 
+static char *iv = "0123456789abcdef";
+static char *key = "0123456789abcdef";
+size_t ivsize;
 
 static struct file_operations fops =
 {
@@ -54,9 +62,7 @@ static struct file_operations fops =
    .release = dev_release,
 };
 
-
 static DEFINE_MUTEX(ebbchar_mutex);
-
 
 module_param(iv, charp, 0000);
 MODULE_PARM_DESC(iv, "Initialization Vector");
@@ -98,6 +104,13 @@ static int __init crypto_aelpp_init(void){
    mutex_init(&ebbchar_mutex);
    printk(KERN_INFO "Crypto_aelpp: Mutex created! \n"); // Mutex OK
 
+   if (!crypto_has_skcipher("salsa20", 0, 0)) {
+    pr_err("skcipher not found\n");
+    return -EINVAL;
+   }
+
+   printk(KERN_INFO "Crypto_aelpp: skcipher found ! :)");
+
    printk(KERN_INFO "Crypto_aelpp: device class created correctly\n"); // Made it! device was initialized
    return 0;
 }
@@ -109,7 +122,7 @@ static void __exit crypto_aelpp_exit(void){
    class_destroy(ebbcharClass);                             // remove the device class
    unregister_chrdev(majorNumber, DEVICE_NAME);             // unregister the major number
    mutex_destroy(&ebbchar_mutex);                           // destroy the dynamically-allocated mutex
-   printk(KERN_INFO "Crypto_aelpp: Goodbye from the LKM!\n");
+   printk(KERN_INFO "Crypto_aelpp: Closing the module ! BYE ! :)\n");
 }
 
 
@@ -178,6 +191,91 @@ static int makeHash(char *data){
 	return 0;
 }
 
+static int criptografar(char *data){
+   char * plaintext = data;
+   char * ponteiro_do_iv = NULL;
+   char ciphertext[16] = {0};
+   char keyzada[16] = "0123456789abcdef";
+   int err;
+
+   tfm = crypto_alloc_skcipher("cbc-aes-aesni", 0, 0);
+    if (IS_ERR(tfm)) {
+        printk(KERN_INFO "Crypto_aelpp: impossible to allocate skcipher\n");
+        return PTR_ERR(tfm);
+    }
+
+   /* Default function to set the key for the symetric key cipher */
+    err = crypto_skcipher_setkey(tfm, keyzada, sizeof(keyzada));
+    if (err) {
+        pr_err(KERN_INFO "Crypto_aelpp: fail setting key for transformation: %d\n", err);
+        goto error0;
+    }
+    print_hex_dump(KERN_DEBUG, "Crypto_aelpp: key: ", DUMP_PREFIX_NONE, 16, 1, key, 16,
+               false);
+   
+   /* Each crypto cipher has its own Initialization Vector (IV) size,
+     * because of that I first request the correct size for salsa20 IV and
+     * then set it. Considering this is just an example I'll use as IV the
+     * content of a random memory space which I just allocated. */
+    ivsize = crypto_skcipher_ivsize(tfm);
+    ponteiro_do_iv = kmalloc(ivsize, GFP_KERNEL);
+    if (!ponteiro_do_iv) {
+        printk(KERN_INFO "Crypto_aelpp: could not allocate iv vector\n");
+        err = -ENOMEM;
+        goto error0;
+    }
+    print_hex_dump(KERN_DEBUG, "Crypto_aelpp: ponteiro_do_iv: ", DUMP_PREFIX_NONE, 16, 1, ponteiro_do_iv,
+               ivsize, false);
+
+   
+    /* Requests are objects that hold all information about a crypto
+     * operation, from the tfm itself to the buffers and IV that will be
+     * used in the enc/decryption operations. But it also holds
+     * information about asynchronous calls to the crypto engine. If we
+     * have chosen async calls instead of sync ones, we should also set
+     * the callback function and some other flags in the request object in
+     * order to be able to receive the output date from each operation
+     * finished. */
+    req = skcipher_request_alloc(tfm, GFP_KERNEL);
+    if (!req) {
+        printk(KERN_INFO "Crypto_aelpp: impossible to allocate skcipher request\n");
+        err = -ENOMEM;
+        goto error0;
+    }
+
+    /* The word to be encrypted */
+    /* TODO: explain scatter/gather lists, that has relation to DMA */
+    //  memcpy(plaintext, "aloha", 6);
+    sg_init_one(&sg, plaintext, 16);
+    skcipher_request_set_crypt(req, &sg, &sg, 16, ponteiro_do_iv);
+
+    print_hex_dump(KERN_DEBUG, "Crypto_aelpp: orig text: ", DUMP_PREFIX_NONE, 16, 1,
+               plaintext, 16, true);
+
+    /* Encrypt operation against "plaintext" content */
+    err = crypto_skcipher_encrypt(req);
+
+    if (err) {
+        printk(KERN_INFO "Crypto_aelpp: could not encrypt data\n");
+        goto error1;
+    }
+
+    sg_copy_to_buffer(&sg, 1, ciphertext, 16);
+    print_hex_dump(KERN_DEBUG, "encr text: ", DUMP_PREFIX_NONE, 16, 1,
+               ciphertext, 16, true);
+
+   strncpy(message,ciphertext,strlen(ciphertext));
+	size_of_message = strlen(ciphertext);
+
+   printk(KERN_INFO "Crypto_aelpp: cifrado: %s\n", ciphertext);
+
+   error1:
+    skcipher_request_free(req);
+   error0:
+    crypto_free_skcipher(tfm);
+    return err;
+} 
+
 
 static ssize_t dev_write(struct file *filep, const char *buffer, size_t len, loff_t *offset){
    char *data,operation;
@@ -193,11 +291,13 @@ static ssize_t dev_write(struct file *filep, const char *buffer, size_t len, lof
    switch(operation){
 		case 'c':
 			printk(KERN_INFO "Crypto_aelpp: Lets cipher\n");
+         ret = criptografar(data);
 			break;
 		case 'd':
 			printk(KERN_INFO "Crypto_aelpp: Lets decipher\n");
 			break;
 		case 'h':
+         printk(KERN_INFO "Crypto_aelpp: Lets hash\n");
 			ret = makeHash(data);
 			break;
 	}
