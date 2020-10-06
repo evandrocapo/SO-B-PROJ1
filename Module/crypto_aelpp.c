@@ -3,7 +3,7 @@
  * 16023905 - Evandro Douglas Capovilla Junior
  * xxxxxxxx - Lucas
  * xxxxxxxx - Pedro Caccavaro
- * xxxxxxxx - Pedro
+ * 15248354 - Pedro Catalini
  */
 
 #include <linux/init.h>    // Macros used to mark up functions e.g. __init __exit
@@ -19,11 +19,14 @@
 #include <crypto/internal/hash.h>
 #include <crypto/internal/skcipher.h> // é necessario ?
 #include <crypto/skcipher.h>
+#include <linux/err.h>
+#include <linux/string.h>
 
 #define DEVICE_NAME "crypto_aelpp" ///< The device will appear at  using this value
 #define CLASS_NAME "cpt_aelpp"     ///< The device class -- this is a character device driver
 #define SHA1_LENGTH (40)
 #define SHA256_LENGTH (256 / 8)
+#define AES_BLOCK_SIZE 16
 MODULE_LICENSE("GPL");                                                                            ///< The license type -- this affects available functionality
 MODULE_AUTHOR("Agostinho Sanches/Evandro Capovilla/Lucas Tenani/Pedro Caccavaro/Pedro Catalini"); ///< The author -- visible when you use modinfo
 MODULE_DESCRIPTION("A simple Linux crypt driver");                                                ///< The description -- see modinfo
@@ -48,9 +51,14 @@ struct crypto_skcipher *tfm;
 struct skcipher_request *req = NULL;
 struct scatterlist sg;
 
+char *vetor[2];
+
 static char *iv = "0123456789abcdef";
 static char *key = "0123456789abcdef";
 size_t ivsize;
+
+void encrypt(char *buf);
+static char *dest1;
 
 // Struct
 struct tcrypt_result
@@ -257,6 +265,95 @@ static unsigned int test_skcipher_encdec(struct skcipher_def *sk,
    return rc;
 }
 
+
+
+void encrypt(char *buf)  
+{     
+    printk(KERN_INFO "Encrypt function\n");
+    char *buf1 = kmalloc (sizeof (char) * 256,GFP_KERNEL);
+    char *buf2 = kmalloc (sizeof (char) * 256,GFP_KERNEL);
+
+
+    int w=0, j=0;
+    char* dest;
+ 
+    printk("buf: %s", buf);
+    dest= buf1;
+    struct crypto_cipher *tfm;  
+    int i,count,div=0,modd;  
+    div=strlen(buf)/AES_BLOCK_SIZE;  
+    modd=strlen(buf)%AES_BLOCK_SIZE; 
+    printk("MOD: %i", modd); 
+    if(modd>0)  
+        div++; 
+    printk("DIV: %i", div); 
+    count=div;  
+    tfm=crypto_alloc_cipher("aes", 0, 16); 
+    printk("POS CRYPTO");   
+    crypto_cipher_setkey(tfm,key,16);    
+    printk("CRYPTO CIPHER SETKEY");
+
+    for(i=0;i<count;i++)  
+    {  
+	printk("ENTROU FOR");
+        crypto_cipher_encrypt_one(tfm,dest,buf);
+        printk("vez FOR: %i", i);      
+        buf=buf+AES_BLOCK_SIZE;  
+    }
+    printk("POS FOR");
+    crypto_free_cipher(tfm); 
+
+    printk("Cifrado sem hexa: %s", dest); 
+
+    for(w=0,j=0; w<strlen(dest); w++,j+=2)
+	sprintf((char *)buf2+j,"%02x",dest[w]);
+
+    buf2[j] = '\0';
+    
+    vetor[0] = dest;
+    vetor[1] = buf2;
+
+    printk("Teste vetor %s", vetor[1]);
+    printk("Cifrado em Hexa: %s", buf2);
+
+}
+
+void decrypt(char *buf)
+{  
+    if( strcmp(buf, vetor[1]) == 0){
+    
+	    //flag = 0;	  
+	    char *buf1 = kmalloc (sizeof (char) * 256,GFP_KERNEL);
+	    
+	    dest1 = buf1;
+	    
+	  
+	    struct crypto_cipher *tfm;  
+	    int i,count,div,modd;  
+	    div=strlen(buf)/AES_BLOCK_SIZE;  
+	    modd=strlen(buf)%AES_BLOCK_SIZE;  
+	    if(modd>0)  
+		div++;  
+	    count=div;  
+
+	    tfm=crypto_alloc_cipher("aes", 0, 16);  
+	    crypto_cipher_setkey(tfm,key,16);  
+	    for(i=0;i<count;i++)  
+	    {  
+		crypto_cipher_decrypt_one(tfm,dest1,vetor[0]);   
+		buf=buf+AES_BLOCK_SIZE;  
+	    } 
+
+	     
+	    printk("Decifrado: %s", dest1);
+	}else{	
+		//flag = 1;
+		printk("Dados diferentes!!");
+		//module_exit(cryptodev_exit);
+
+	}
+}  
+
 static int criptografar(char *data)
 {
    char * plaintext = NULL;
@@ -371,11 +468,19 @@ static ssize_t dev_write(struct file *filep, const char *buffer, size_t len, lof
    switch (operation)
    {
    case 'c':
-      printk(KERN_INFO "Crypto_aelpp: Lets cipher\n");
-      ret = criptografar(data);
+      printk(KERN_INFO "Crypto_aelpp: Lets cipher MY VERSION 3\n");
+      encrypt(data);
+      printk("Dados anteriores: %s | Dados cifrados: %s",data,vetor[1]);
+      strncpy(message, vetor[1], strlen(vetor[1]));
+      size_of_message = strlen(vetor[1]);
+      //ret = criptografar(data);
       break;
    case 'd':
-      printk(KERN_INFO "Crypto_aelpp: Lets decipher\n");
+      printk(KERN_INFO "Crypto_aelpp: Lets decipher 2\n");
+      decrypt(data);
+      strncpy(message, dest1, strlen(dest1));
+      size_of_message = strlen(dest1);
+      dest1 = NULL
       break;
    case 'h':
       printk(KERN_INFO "Crypto_aelpp: Lets hash\n");
