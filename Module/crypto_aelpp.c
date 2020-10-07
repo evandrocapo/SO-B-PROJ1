@@ -206,9 +206,6 @@ static int makeHash(char *data)
       return -1;
    }
 
-   /*kfree(shash);
-	crypto_free_shash(sha1);
-	*/
 
    printk(KERN_INFO "Crypto_aelpp: sha1 Plaintext: %s\n", plaintext);
    for (i = 0; i < SHA256_LENGTH; i++)
@@ -240,7 +237,6 @@ static unsigned int test_skcipher_encdec(struct skcipher_def *sk,
    if (enc)
       rc = crypto_skcipher_encrypt(sk->req);
    else
-      // rc = crypto_skcipher_decrypt(sk->req);
 
    switch (rc)
    {
@@ -278,32 +274,33 @@ void encrypt(char *buf)
     char* dest;
  
     printk("buf: %s", buf);
+    printk("buf len: %i", strlen(buf));
     dest= buf1;
-    struct crypto_cipher *tfm;  
-    int i,count,div=0,modd;  
+    struct crypto_cipher *tfm;
+    int i,div=0,modd;  
     div=strlen(buf)/AES_BLOCK_SIZE;  
     modd=strlen(buf)%AES_BLOCK_SIZE; 
     printk("MOD: %i", modd); 
     if(modd>0)  
         div++; 
     printk("DIV: %i", div); 
-    count=div;  
     tfm=crypto_alloc_cipher("aes", 0, 16); 
     printk("POS CRYPTO");   
     crypto_cipher_setkey(tfm,key,16);    
     printk("CRYPTO CIPHER SETKEY");
 
-    for(i=0;i<count;i++)  
+    for(i=0;i<div;i++)  
     {  
-	printk("ENTROU FOR");
-        crypto_cipher_encrypt_one(tfm,dest,buf);
-        printk("vez FOR: %i", i);      
+        printk("FOR: %i", i);
+        crypto_cipher_encrypt_one(tfm,buf1,buf);
+        buf1 = buf1 + AES_BLOCK_SIZE; // TODO rever
         buf=buf+AES_BLOCK_SIZE;  
     }
     printk("POS FOR");
     crypto_free_cipher(tfm); 
 
-    printk("Cifrado sem hexa: %s", dest); 
+    printk("Cifrado sem hexa: %s", dest);
+    printk("w: %i", strlen(dest)); 
 
     for(w=0,j=0; w<strlen(dest); w++,j+=2)
 	sprintf((char *)buf2+j,"%02x",dest[w]);
@@ -313,145 +310,39 @@ void encrypt(char *buf)
     vetor[0] = dest;
     vetor[1] = buf2;
 
-    printk("Teste vetor %s", vetor[1]);
-    printk("Cifrado em Hexa: %s", buf2);
-
+    printk("vetor 0 %s", vetor[0]);
+    printk("vetor 1 %s", vetor[1]);
 }
 
 void decrypt(char *buf)
 {  
     if( strcmp(buf, vetor[1]) == 0){
-    
-	    //flag = 0;	  
+  
 	    char *buf1 = kmalloc (sizeof (char) * 256,GFP_KERNEL);
 	    
 	    dest1 = buf1;
-	    
 	  
 	    struct crypto_cipher *tfm;  
-	    int i,count,div,modd;  
+	    int i,div,modd,offset;  
 	    div=strlen(buf)/AES_BLOCK_SIZE;  
 	    modd=strlen(buf)%AES_BLOCK_SIZE;  
 	    if(modd>0)  
 		div++;  
-	    count=div;  
 
 	    tfm=crypto_alloc_cipher("aes", 0, 16);  
 	    crypto_cipher_setkey(tfm,key,16);  
-	    for(i=0;i<count;i++)  
+	    for(i=0;i<div;i++)  
 	    {  
-		crypto_cipher_decrypt_one(tfm,dest1,vetor[0]);   
-		buf=buf+AES_BLOCK_SIZE;  
-	    } 
-
-	     
+	    	printk("FOR: %i", i);
+		crypto_cipher_decrypt_one(tfm,buf1,vetor[0]); 
+		buf1 = buf1 +  AES_BLOCK_SIZE;
+		vetor[0]=vetor[0]+AES_BLOCK_SIZE;
+		offset = offset + 8;
+	    }
+	 dest1[offset] = '\0';
 	    printk("Decifrado: %s", dest1);
-	}else{	
-		//flag = 1;
-		printk("Dados diferentes!!");
-		//module_exit(cryptodev_exit);
-
 	}
 }  
-
-static int criptografar(char *data)
-{
-   char * plaintext = NULL;
-   char * ponteiro_do_iv;
-   char ciphertext[16] = {0};
-   char keyzada[16] = "0123456789abcdef";
-   char ivzada[16] = "0123456789abcdef";
-   int err;
-
-   plaintext = kmalloc(16, GFP_KERNEL);
-    if (!plaintext) {
-        printk(KERN_INFO "Crypto_aelpp: could not allocate plaintext\n");
-        goto error0;
-    }
-
-   tfm = crypto_alloc_skcipher("cbc-aes-aesni", 0, 0);
-    if (IS_ERR(tfm)) {
-        printk(KERN_INFO "Crypto_aelpp: impossible to allocate skcipher\n");
-        return PTR_ERR(tfm);
-    }
-
-   /* Default function to set the key for the symetric key cipher */
-    err = crypto_skcipher_setkey(tfm, keyzada, sizeof(keyzada));
-    if (err) {
-        pr_err(KERN_INFO "Crypto_aelpp: fail setting key for transformation: %d\n", err);
-        goto error0;
-    }
-    print_hex_dump(KERN_DEBUG, "Crypto_aelpp: key: ", DUMP_PREFIX_NONE, 16, 1, keyzada, 16,
-               false);
-
-   /* Each crypto cipher has its own Initialization Vector (IV) size,
-     * because of that I first request the correct size for salsa20 IV and
-     * then set it. Considering this is just an example I'll use as IV the
-     * content of a random memory space which I just allocated. */
-    ivsize = crypto_skcipher_ivsize(tfm);
-    ponteiro_do_iv = kmalloc(ivsize, GFP_KERNEL);
-    if (!ponteiro_do_iv) {
-        printk(KERN_INFO "Crypto_aelpp: could not allocate iv vector\n");
-        err = -ENOMEM;
-        goto error0;
-    }
-
-   //  memcpy(ponteiro_do_iv, "0123456789abcdef", 16);
-    print_hex_dump(KERN_DEBUG, "Crypto_aelpp: ponteiro_do_iv: ", DUMP_PREFIX_NONE, 16, 1, ivzada,
-               ivsize, false);
-
-    /* Requests are objects that hold all information about a crypto
-     * operation, from the tfm itself to the buffers and IV that will be
-     * used in the enc/decryption operations. But it also holds
-     * information about asynchronous calls to the crypto engine. If we
-     * have chosen async calls instead of sync ones, we should also set
-     * the callback function and some other flags in the request object in
-     * order to be able to receive the output date from each operation
-     * finished. */
-    req = skcipher_request_alloc(tfm, GFP_KERNEL);
-    if (!req) {
-        printk(KERN_INFO "Crypto_aelpp: impossible to allocate skcipher request\n");
-        err = -ENOMEM;
-        goto error0;
-    }
-
-    /* The word to be encrypted */
-    /* TODO: explain scatter/gather lists, that has relation to DMA */
-    memcpy(plaintext, data, sizeof(data));
-
-    sg_init_one(&sg, plaintext, 16);
-    skcipher_request_set_crypt(req, &sg, &sg, 16, ivzada);
-
-    print_hex_dump(KERN_DEBUG, "Crypto_aelpp: orig text: ", DUMP_PREFIX_NONE, 16, 1,
-               plaintext, 16, true);
-
-    /* Encrypt operation against "plaintext" content */
-    err = crypto_skcipher_encrypt(req);
-
-    if (err) {
-        printk(KERN_INFO "Crypto_aelpp: could not encrypt data\n");
-        goto error1;
-    }
-
-    sg_copy_to_buffer(&sg, 1, ciphertext, 16);
-    print_hex_dump(KERN_DEBUG, "encr text: ", DUMP_PREFIX_NONE, 16, 1,
-               ciphertext, 16, true);
-
-
-   memcpy(message, ciphertext, 16);
-   size_of_message = strnlen_user(ciphertext, 16);
-   message[16] = '\0';
-
-   printk(KERN_INFO "Crypto_aelpp: cifrado: %s\n", message);
-
-   error1:
-    skcipher_request_free(req);
-   error2:
-    kfree(plaintext);
-   error0:
-    crypto_free_skcipher(tfm);
-    return err;
-}
 
 static ssize_t dev_write(struct file *filep, const char *buffer, size_t len, loff_t *offset)
 {
@@ -459,7 +350,9 @@ static ssize_t dev_write(struct file *filep, const char *buffer, size_t len, lof
    char space = ' ';
    int ret;
 
-   copy_from_user(message, buffer, len);
+   strncpy(message, buffer, len);
+   message[len] = '\0';
+   printk(KERN_INFO "###### message %s ######\n", message);
    operation = *message;
    data = strchr(message, space);
    data = data + 1;
@@ -473,6 +366,7 @@ static ssize_t dev_write(struct file *filep, const char *buffer, size_t len, lof
       printk("Dados anteriores: %s | Dados cifrados: %s",data,vetor[1]);
       strncpy(message, vetor[1], strlen(vetor[1]));
       size_of_message = strlen(vetor[1]);
+      printk(KERN_INFO "size len %i\n",size_of_message);
       //ret = criptografar(data);
       break;
    case 'd':
@@ -480,7 +374,7 @@ static ssize_t dev_write(struct file *filep, const char *buffer, size_t len, lof
       decrypt(data);
       strncpy(message, dest1, strlen(dest1));
       size_of_message = strlen(dest1);
-      dest1 = NULL
+      printk(KERN_INFO "size len %i\n",size_of_message);
       break;
    case 'h':
       printk(KERN_INFO "Crypto_aelpp: Lets hash\n");
