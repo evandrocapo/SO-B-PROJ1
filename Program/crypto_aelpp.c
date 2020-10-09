@@ -3,7 +3,7 @@
  * 16023905 - Evandro Douglas Capovilla Junior
  * 16105744 - Lucas Tenani Felix Martins
  * 16124679 - Pedro Andrade Caccavaro
- * xxxxxxxx - Pedro
+ * 15248354 - Pedro Angelo Catalini
  */
 
 #include<stdio.h>

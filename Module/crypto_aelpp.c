@@ -1,9 +1,9 @@
 /**
  * 16507915 - Agostinho Sanches de Araujo
  * 16023905 - Evandro Douglas Capovilla Junior
- * xxxxxxxx - Lucas
- * xxxxxxxx - Pedro Caccavaro
- * 15248354 - Pedro Catalini
+ * 16105744 - Lucas Tenani Felix Martins
+ * 16124679 - Pedro Andrade Caccavaro
+ * 15248354 - Pedro Angelo Catalini
  */
 
 #include <linux/init.h>    // Macros used to mark up functions e.g. __init __exit
