@@ -1,104 +1,103 @@
 /**
  * 16507915 - Agostinho Sanches de Araujo
  * 16023905 - Evandro Douglas Capovilla Junior
- * 16105744 - Lucas Tenani Felix Martins
- * 16124679 - Pedro Andrade Caccavaro
- * xxxxxxxx - Pedro
+ * xxxxxxxx - Lucas
+ * xxxxxxxx - Pedro Caccavaro
+ * 15248354 - Pedro Catalini
  */
 
-#include <linux/init.h>           // Macros used to mark up functions e.g. __init __exit
-#include <linux/module.h>         // Core header for loading LKMs into the kernel
-#include <linux/device.h>         // Header to support the kernel Driver Model
-#include <linux/kernel.h>         // Contains types, macros, functions for the kernel
-#include <linux/fs.h>             // Header for the Linux file system support
-#include <linux/uaccess.h>          // Required for the copy to user function
-#include <linux/mutex.h>	         /// Required for the mutex functionality
+#include <linux/init.h>    // Macros used to mark up functions e.g. __init __exit
+#include <linux/module.h>  // Core header for loading LKMs into the kernel
+#include <linux/device.h>  // Header to support the kernel Driver Model
+#include <linux/kernel.h>  // Contains types, macros, functions for the kernel
+#include <linux/fs.h>      // Header for the Linux file system support
+#include <linux/uaccess.h> // Required for the copy to user function
+#include <linux/mutex.h>   /// Required for the mutex functionality
 #include <linux/scatterlist.h>
-#include <asm/uaccess.h>
+#include <asm/uaccess.h> // é necessario ?
 #include <linux/crypto.h>
 #include <crypto/internal/hash.h>
-#include <crypto/internal/skcipher.h>
-#include <linux/mm.h>
-#include <linux/moduleparam.h>
-#define SYMMETRIC_KEY_LENGTH 32
-#define CIPHER_BLOCK_SIZE 16
-#define  DEVICE_NAME "crypto_aelpp"    ///< The device will appear at  using this value
-#define  CLASS_NAME  "cpt_aelpp"        ///< The device class -- this is a character device driver
-#define ENCRYPT   0
-#define DECRYPT   1
+#include <crypto/internal/skcipher.h> // é necessario ?
+#include <crypto/skcipher.h>
+#include <linux/err.h>
+#include <linux/string.h>
+
+#define DEVICE_NAME "crypto_aelpp" ///< The device will appear at  using this value
+#define CLASS_NAME "cpt_aelpp"     ///< The device class -- this is a character device driver
 #define SHA1_LENGTH (40)
-#define SHA256_LENGTH (256/8)
-#define DATA_SIZE       16
-#define FILL_SG(sg,ptr,len)     do { (sg)->page = virt_to_page(ptr); (sg)->offset = offset_in_page(ptr); (sg)->length = len; } while (0)
-MODULE_LICENSE("GPL");            ///< The license type -- this affects available functionality
-MODULE_AUTHOR("Agostinho Sanches/Evandro Capovilla/Lucas Tenani/Pedro Caccavaro/Pedro Catalini");    ///< The author -- visible when you use modinfo
-MODULE_DESCRIPTION("A simple Linux crypt driver");  ///< The description -- see modinfo
-MODULE_VERSION("1.0");            ///< A version number to inform users
+#define SHA256_LENGTH (256 / 8)
+#define AES_BLOCK_SIZE 16
+MODULE_LICENSE("GPL");                                                                            ///< The license type -- this affects available functionality
+MODULE_AUTHOR("Agostinho Sanches/Evandro Capovilla/Lucas Tenani/Pedro Caccavaro/Pedro Catalini"); ///< The author -- visible when you use modinfo
+MODULE_DESCRIPTION("A simple Linux crypt driver");                                                ///< The description -- see modinfo
+MODULE_VERSION("1.0");                                                                            ///< A version number to inform users
 
-
-static int    majorNumber;                  ///< Stores the device number
-static char   message[256] = {0};           ///< Memory for the string that
-static short  size_of_message;              ///< Used to remember the size of the string stored
-static int    numberOpens = 0;              ///< Counts the number of times the device is opened
-static struct class*  ebbcharClass  = NULL; ///< The device-driver class struct pointer
-static struct device* ebbcharDevice = NULL; ///< The device-driver device struct pointer
-static char *iv = "blah";
-static char *key = "blah";
+static int majorNumber;                     ///< Stores the device number
+static char message[256] = {0};             ///< Memory for the string that
+static short size_of_message;               ///< Used to remember the size of the string stored
+static int numberOpens = 0;                 ///< Counts the number of times the device is opened
+static struct class *ebbcharClass = NULL;   ///< The device-driver class struct pointer
+static struct device *ebbcharDevice = NULL; ///< The device-driver device struct pointer
 
 static int makeHash(char *data);
+static int criptografar(char *data);
 
-static int makeEncryptOrDecrypt(char* input, int action)
-
-static void hexdump(unsigned char *buf, unsigned int len);
-
-static int     dev_open(struct inode *, struct file *);
-static int     dev_release(struct inode *, struct file *);
+static int dev_open(struct inode *, struct file *);
+static int dev_release(struct inode *, struct file *);
 static ssize_t dev_read(struct file *, char *, size_t, loff_t *);
 static ssize_t dev_write(struct file *, const char *, size_t, loff_t *);
 
+struct crypto_skcipher *tfm;
+struct skcipher_request *req = NULL;
+struct scatterlist sg;
 
+char *vetor[2];
 
-static struct file_operations fops =
+static char *iv = "";
+static char *key = "";
+size_t ivsize;
+
+void encrypt(char *buf);
+static char *dest1;
+
+// Struct
+struct tcrypt_result
 {
-   .open = dev_open,
-   .read = dev_read,
-   .write = dev_write,
-   .release = dev_release,
+   struct completion completion;
+   int err;
 };
-
-struct tcrypt_result 
-{
- struct completion completion;
- int err;
-};
-struct skcipher_def 
+/* tie all data structures together */
+struct skcipher_def
 {
    struct scatterlist sg;
-   struct crypto_skcipher * tfm;
-   struct skcipher_request * req;
+   struct crypto_skcipher *tfm;
+   struct skcipher_request *req;
    struct tcrypt_result result;
-   char * scratchpad;
-   char * ciphertext;
-   char * ivdata;
 };
-static struct skcipher_def sk;
 
+static struct file_operations fops =
+    {
+        .open = dev_open,
+        .read = dev_read,
+        .write = dev_write,
+        .release = dev_release,
+};
 
 static DEFINE_MUTEX(ebbchar_mutex);
-
 
 module_param(iv, charp, 0000);
 MODULE_PARM_DESC(iv, "Initialization Vector");
 module_param(key, charp, 0000);
 MODULE_PARM_DESC(key, "Key to AES");
 
-
-static int __init crypto_aelpp_init(void){
+static int __init crypto_aelpp_init(void)
+{
    printk(KERN_INFO "Crypto_aelpp: Initializing the Crypto\n");
 
    // Try to dynamically allocate a major number for the device -- more difficult but worth it
    majorNumber = register_chrdev(0, DEVICE_NAME, &fops);
-   if (majorNumber<0){
+   if (majorNumber < 0)
+   {
       printk(KERN_ALERT "Crypto_aelpp failed to register a major number\n");
       return majorNumber;
    }
@@ -108,17 +107,19 @@ static int __init crypto_aelpp_init(void){
 
    // Register the device class
    ebbcharClass = class_create(THIS_MODULE, CLASS_NAME);
-   if (IS_ERR(ebbcharClass)){                // Check for error and clean up if there is
+   if (IS_ERR(ebbcharClass))
+   { // Check for error and clean up if there is
       unregister_chrdev(majorNumber, DEVICE_NAME);
       printk(KERN_ALERT "Failed to register device class\n");
-      return PTR_ERR(ebbcharClass);          // Correct way to return an error on a pointer
+      return PTR_ERR(ebbcharClass); // Correct way to return an error on a pointer
    }
    printk(KERN_INFO "Crypto_aelpp: device class registered correctly\n");
 
    // Register the device driver
    ebbcharDevice = device_create(ebbcharClass, NULL, MKDEV(majorNumber, 0), NULL, DEVICE_NAME);
-   if (IS_ERR(ebbcharDevice)){               // Clean up if there is an error
-      class_destroy(ebbcharClass);           // Repeated code but the alternative is goto statements
+   if (IS_ERR(ebbcharDevice))
+   {                               // Clean up if there is an error
+      class_destroy(ebbcharClass); // Repeated code but the alternative is goto statements
       unregister_chrdev(majorNumber, DEVICE_NAME);
       printk(KERN_ALERT "Failed to create the device\n");
       return PTR_ERR(ebbcharDevice);
@@ -127,25 +128,32 @@ static int __init crypto_aelpp_init(void){
    mutex_init(&ebbchar_mutex);
    printk(KERN_INFO "Crypto_aelpp: Mutex created! \n"); // Mutex OK
 
+   if (!crypto_has_skcipher("salsa20", 0, 0))
+   {
+      pr_err("skcipher not found\n");
+      return -EINVAL;
+   }
+
+   printk(KERN_INFO "Crypto_aelpp: skcipher found ! :)");
+
    printk(KERN_INFO "Crypto_aelpp: device class created correctly\n"); // Made it! device was initialized
    return 0;
 }
 
-
-static void __exit crypto_aelpp_exit(void){
-   device_destroy(ebbcharClass, MKDEV(majorNumber, 0));     // remove the device
-   class_unregister(ebbcharClass);                          // unregister the device class
-   class_destroy(ebbcharClass);                             // remove the device class
-   unregister_chrdev(majorNumber, DEVICE_NAME);             // unregister the major number
-   mutex_destroy(&ebbchar_mutex);                           // destroy the dynamically-allocated mutex
-   printk(KERN_INFO "Crypto_aelpp: Goodbye from the LKM!\n");
+static void __exit crypto_aelpp_exit(void)
+{
+   device_destroy(ebbcharClass, MKDEV(majorNumber, 0)); // remove the device
+   class_unregister(ebbcharClass);                      // unregister the device class
+   class_destroy(ebbcharClass);                         // remove the device class
+   unregister_chrdev(majorNumber, DEVICE_NAME);         // unregister the major number
+   mutex_destroy(&ebbchar_mutex);                       // destroy the dynamically-allocated mutex
+   printk(KERN_INFO "Crypto_aelpp: Closing the module ! BYE ! :)\n");
 }
 
-
-
-
-static int dev_open(struct inode *inodep, struct file *filep){
-    if(!mutex_trylock(&ebbchar_mutex)){    /// Try to acquire the mutex returns 1 successful and 0
+static int dev_open(struct inode *inodep, struct file *filep)
+{
+   if (!mutex_trylock(&ebbchar_mutex))
+   { /// Try to acquire the mutex returns 1 successful and 0
       printk(KERN_ALERT "Crypto_aelpp: Device in use by another process");
       return -EBUSY;
    }
@@ -154,251 +162,253 @@ static int dev_open(struct inode *inodep, struct file *filep){
    return 0;
 }
 
-
-static int makeHash(char *data){
-	char * plaintext = data;
-	char hash_sha1[SHA1_LENGTH];
-	struct crypto_shash *sha1;
-	struct shash_desc *shash;
-	int i;
-	char str[SHA1_LENGTH*2 + 1];
-
-	sha1 = crypto_alloc_shash("sha1", 0, 0);
-	if (IS_ERR(sha1)){
-		printk(KERN_INFO "Crypto_aelpp: Fail alloc_shash\n");
-		return -1;
-	}
-
-	shash = kmalloc(sizeof(struct shash_desc) + crypto_shash_descsize(sha1),GFP_KERNEL);
-	if (!shash){
-		printk(KERN_INFO "Crypto_aelpp: Fail kmalloc\n");
-		return -ENOMEM;
-	}
-
-	shash->tfm = sha1;
-	shash->flags = 0;
-
-	if(crypto_shash_init(shash)){
-		printk(KERN_INFO "Crypto_aelpp: Fail shash_init\n");
-		return -1;
-	}
-
-	if(crypto_shash_update(shash, plaintext, strlen(plaintext))){
-		printk(KERN_INFO "Crypto_aelpp: Fail shash_update\n");
-		return -1;
-	}
-
-	if(crypto_shash_final(shash, hash_sha1)){
-		printk(KERN_INFO "Crypto_aelpp: Fail shash_final\n");
-		return -1;
-	}
-
-	/*kfree(shash);
-	crypto_free_shash(sha1);
-	*/
-
-	printk(KERN_INFO "Crypto_aelpp: sha1 Plaintext: %s\n", plaintext);
-	for (i = 0; i < SHA256_LENGTH ; i++)
-		sprintf(&str[i*2],"%02x", (unsigned char)hash_sha1[i]);
-	str[i*2] = 0;
-	printk(KERN_INFO "Crypto_aelpp: sha1 Result: %s\n", str);
-	strncpy(message,str,strlen(str));
-	size_of_message = strlen(str);
-	return 0;
-}
-
-
-static ssize_t dev_write(struct file *filep, const char *buffer, size_t len, loff_t *offset){
-   char *data,operation;
-   char space =' ';
-   int ret;
-
-   copy_from_user(message,buffer,len);
-   operation = *message;
-   data = strchr(message,space);
-   data = data+1;
-   printk(KERN_INFO "Crypto_aelpp: Received - Operation: %c Data: %s\n", operation, data);
-
-   switch(operation){
-		case 'c':
-         ret = makeEncryptOrDecrypt(data, ENCRYPT);
-			break;
-		case 'd':
-         ret = makeEncryptOrDecrypt(data, DECRYPT);
-			break;
-		case 'h':
-			ret = makeHash(data);
-			break;
-	}
-
-   return len;
-}
-
-
-static ssize_t dev_read(struct file *filep, char *buffer, size_t len, loff_t *offset){
-   int error_count = 0;
-   // copy_to_user has the format ( * to, *from, size) and returns 0 on success
-   error_count = copy_to_user(buffer, message, size_of_message);
-
-   if (error_count==0){            // if true then have success
-      printk(KERN_INFO "Crypto_aelpp: Sent %d characters to the user\n", size_of_message);
-      return (size_of_message=0);  // clear the position to the start and return 0
-   }
-   else {
-      printk(KERN_INFO "Crypto_aelpp: Failed to send %d characters to the user\n", error_count);
-      return -EFAULT;              // Failed -- return a bad address message (i.e. -14)
-   }
-}
-
-static void test_skcipher_finish(struct skcipher_def * sk)
+static int makeHash(char *data)
 {
-   if (sk->tfm)
-      crypto_free_skcipher(sk->tfm);
-   if (sk->req)
-      skcipher_request_free(sk->req);
-   if (sk->ivdata)
-      kfree(sk->ivdata);
-   if (sk->scratchpad)
-      kfree(sk->scratchpad);
-   if (sk->ciphertext)
-      kfree(sk->ciphertext);
-}
-static int test_skcipher_result(struct skcipher_def * sk, int rc)
-{
-   switch (rc) 
+   char *plaintext = data;
+   char hash_sha1[SHA1_LENGTH];
+   struct crypto_shash *sha1;
+   struct shash_desc *shash;
+   int i;
+   char str[SHA1_LENGTH * 2 + 1];
+
+   sha1 = crypto_alloc_shash("sha1", 0, 0);
+   if (IS_ERR(sha1))
    {
-      case 0:
-      break;
-      case -EINPROGRESS:
-      case -EBUSY:
-         rc = wait_for_completion_interruptible(
-         &sk->result.completion);
-      if (!rc && !sk->result.err) 
-      {
-         reinit_completion(&sk->result.completion);
-         break;
-      }
-      default:
-         printk(KERN_INFO "Crypto_aelpp: skcipher encrypt returned with %d result %d\n",
-         rc, sk->result.err);
-      break;
+      printk(KERN_INFO "Crypto_aelpp: Fail alloc_shash\n");
+      return -1;
    }
-   init_completion(&sk->result.completion);
-   return rc;
+
+   shash = kmalloc(sizeof(struct shash_desc) + crypto_shash_descsize(sha1), GFP_KERNEL);
+   if (!shash)
+   {
+      printk(KERN_INFO "Crypto_aelpp: Fail kmalloc\n");
+      return -ENOMEM;
+   }
+
+   shash->tfm = sha1;
+   shash->flags = 0;
+
+   if (crypto_shash_init(shash))
+   {
+      printk(KERN_INFO "Crypto_aelpp: Fail shash_init\n");
+      return -1;
+   }
+
+   if (crypto_shash_update(shash, plaintext, strlen(plaintext)))
+   {
+      printk(KERN_INFO "Crypto_aelpp: Fail shash_update\n");
+      return -1;
+   }
+
+   if (crypto_shash_final(shash, hash_sha1))
+   {
+      printk(KERN_INFO "Crypto_aelpp: Fail shash_final\n");
+      return -1;
+   }
+
+
+   printk(KERN_INFO "Crypto_aelpp: sha1 Plaintext: %s\n", plaintext);
+   for (i = 0; i < SHA1_LENGTH; i++)
+      sprintf(&str[i * 2], "%02x", (unsigned char)hash_sha1[i]);
+   str[i] = '\0';
+   printk(KERN_INFO "Crypto_aelpp: sha1 Result: %s\n", str);
+   strncpy(message, str, strlen(str));
+   size_of_message = strlen(str);
+   return 0;
 }
-static void test_skcipher_callback(struct crypto_async_request *req, int error)
+
+static void test_skcipher_cb(struct crypto_async_request *req, int error)
 {
    struct tcrypt_result *result = req->data;
+
    if (error == -EINPROGRESS)
       return;
    result->err = error;
    complete(&result->completion);
-   printk(KERN_INFO "Crypto_aelpp: Request finished successfully\n");
+   printk(KERN_INFO "Crypto_aelpp: Encryption finished successfully\n");
 }
 
-static int makeEncryptOrDecrypt(char * input, int action)
+/* Perform cipher operation */
+static unsigned int test_skcipher_encdec(struct skcipher_def *sk,
+                                         int enc)
 {
-   char * plaintext = input;
-   char * password = key;
+   int rc = 0;
 
-   sk.tfm = NULL;
-   sk.req = NULL;
-   sk.scratchpad = NULL;
-   sk.ciphertext = NULL;
-   sk.ivdata = iv;
+   if (enc)
+      rc = crypto_skcipher_encrypt(sk->req);
+   else
 
-   int ret = -1;
-   unsigned char key[SYMMETRIC_KEY_LENGTH];
-   if (!sk->tfm) 
+   switch (rc)
    {
-      sk->tfm = crypto_alloc_skcipher("cbc-aes-aesni", 0, 0);
-      if (IS_ERR(sk->tfm)) 
+   case 0:
+      break;
+   case -EINPROGRESS:
+   case -EBUSY:
+      rc = wait_for_completion_interruptible(
+          &sk->result.completion);
+      if (!rc && !sk->result.err)
       {
-         printk(KERN_INFO "Crypto_aelpp: could not allocate skcipher handle\n");
-         return PTR_ERR(sk->tfm);
-      }  
-   }
-   if (!sk->req) 
-   {
-      sk->req = skcipher_request_alloc(sk->tfm, GFP_KERNEL);
-      if (!sk->req) 
-      {
-         printk(KERN_INFO "Crypto_aelpp: could not allocate skcipher request\n");
-         ret = -1;
-         goto out;
+         reinit_completion(&sk->result.completion);
+         break;
       }
+   default:
+      printk(KERN_INFO "Crypto_aelpp: skcipher encrypt returned with %d result %d\n",
+              rc, sk->result.err);
+      break;
    }
-   skcipher_request_set_callback(sk->req, CRYPTO_TFM_REQ_MAY_BACKLOG, test_skcipher_callback, &sk->result);
-   /* clear the key */
-   memset((void*)key,'\0', SYMMETRIC_KEY_LENGTH);
-
-   sprintf((char*)key,"%s",password);
-
-   /* AES 256 with given symmetric key */
-   if (crypto_skcipher_setkey(sk->tfm, key, SYMMETRIC_KEY_LENGTH)) 
-   {
-      printk(KERN_INFO "Crypto_aelpp: key could not be set\n");
-      ret = -1;
-      goto out;
-   }
-   printk(KERN_INFO "Crypto_aelpp: Symmetric key: %s\n", key);
-   printk(KERN_INFO "Crypto_aelpp: Plaintext: %s\n", plaintext);
-   if (!sk->ivdata) 
-   {
-      /* see https://en.wikipedia.org/wiki/Initialization_vector */
-      sk->ivdata = kmalloc(CIPHER_BLOCK_SIZE, GFP_KERNEL);
-      if (!sk->ivdata) 
-      {
-         printk(KERN_INFO "Crypto_aelpp: could not allocate ivdata\n");
-         goto out;
-      }
-      get_random_bytes(sk->ivdata, CIPHER_BLOCK_SIZE);
-   }
-   if (!sk->scratchpad) 
-   {
-      /* The text to be encrypted */
-      sk->scratchpad = kmalloc(CIPHER_BLOCK_SIZE, GFP_KERNEL);
-      if (!sk->scratchpad) 
-      {
-         printk(KERN_INFO "Crypto_aelpp: could not allocate scratchpad\n");
-         goto out;
-      }
-   }
-   sprintf((char*)sk->scratchpad,"%s",plaintext);
-   sg_init_one(&sk->sg, sk->scratchpad, CIPHER_BLOCK_SIZE);
-   skcipher_request_set_crypt(sk->req, &sk->sg, &sk->sg, CIPHER_BLOCK_SIZE, sk->ivdata);
-
    init_completion(&sk->result.completion);
 
-   switch(action)
+   return rc;
+}
+
+
+
+void encrypt(char *buf)  
+{     
+    printk(KERN_INFO "Encrypt function\n");
+    char *buf1 = kmalloc (sizeof (char) * 256,GFP_KERNEL);
+    char *buf2 = kmalloc (sizeof (char) * 256,GFP_KERNEL);
+
+
+    int w=0, j=0;
+    char* dest;
+ 
+    printk("buf: %s", buf);
+    printk("buf len: %i", strlen(buf));
+    dest= buf1;
+    struct crypto_cipher *tfm;
+    int i,div=0,modd;  
+    div=strlen(buf)/AES_BLOCK_SIZE;  
+    modd=strlen(buf)%AES_BLOCK_SIZE; 
+    printk("MOD: %i", modd); 
+    if(modd>0)  
+        div++; 
+    printk("DIV: %i", div); 
+    tfm=crypto_alloc_cipher("aes", 0, 16); 
+    printk("POS CRYPTO");   
+    crypto_cipher_setkey(tfm,key,16);    
+    printk("CRYPTO CIPHER SETKEY");
+
+    for(i=0;i<div;i++)  
+    {  
+        printk("FOR: %i", i);
+        crypto_cipher_encrypt_one(tfm,buf1,buf);
+        buf1 = buf1 + AES_BLOCK_SIZE; // TODO rever
+        buf=buf+AES_BLOCK_SIZE;  
+    }
+    printk("POS FOR");
+    crypto_free_cipher(tfm); 
+
+    printk("Cifrado sem hexa: %s", dest);
+    printk("w: %i", strlen(dest)); 
+
+    for(w=0,j=0; w<strlen(dest); w++,j+=2)
+	sprintf((char *)buf2+j,"%02x",dest[w]);
+
+    buf2[j] = '\0';
+    
+    vetor[0] = dest;
+    vetor[1] = buf2;
+
+    printk("vetor 0 %s", vetor[0]);
+    printk("vetor 1 %s", vetor[1]);
+}
+
+void decrypt(char *buf)
+{  
+    if( strcmp(buf, vetor[1]) == 0){
+  
+	    char *buf1 = kmalloc (sizeof (char) * 256,GFP_KERNEL);
+	    
+	    dest1 = buf1;
+	  
+	    struct crypto_cipher *tfm;  
+	    int i,div,modd,offset;  
+	    div=strlen(buf)/AES_BLOCK_SIZE;  
+	    modd=strlen(buf)%AES_BLOCK_SIZE;  
+	    if(modd>0)  
+		div++;  
+
+	    tfm=crypto_alloc_cipher("aes", 0, 16);  
+	    crypto_cipher_setkey(tfm,key,16);  
+	    for(i=0;i<div;i++)  
+	    {  
+	    	printk("FOR: %i", i);
+		crypto_cipher_decrypt_one(tfm,buf1,vetor[0]); 
+		buf1 = buf1 +  AES_BLOCK_SIZE;
+		vetor[0]=vetor[0]+AES_BLOCK_SIZE;
+		offset = offset + 8;
+	    }
+	 dest1[offset] = '\0';
+	    printk("Decifrado: %s", dest1);
+	}
+}  
+
+static ssize_t dev_write(struct file *filep, const char *buffer, size_t len, loff_t *offset)
+{
+   char *data, operation;
+   char space = ' ';
+   int ret;
+
+   strncpy(message, buffer, len);
+   message[len] = '\0';
+   printk(KERN_INFO "###### message %s ######\n", message);
+   operation = *message;
+   data = strchr(message, space);
+   data = data + 1;
+   printk(KERN_INFO "Crypto_aelpp: Received - Operation: %c Data: %s\n", operation, data);
+
+   switch (operation)
    {
-      case ENCRYPT:
-         ret = crypto_skcipher_encrypt(sk->req);
-         ret = test_skcipher_result(sk, ret);
-         if (ret)
-            printk(KERN_INFO "Crypto_aelpp: Encryption request successful\n \n");
-         return ret;
+   case 'c':
+      printk(KERN_INFO "Crypto_aelpp: Lets cipher MY VERSION 3\n");
+      encrypt(data);
+      printk("Dados anteriores: %s | Dados cifrados: %s",data,vetor[1]);
+      strncpy(message, vetor[1], strlen(vetor[1]));
+      size_of_message = strlen(vetor[1]);
+      printk(KERN_INFO "size len %i\n",size_of_message);
+      //ret = criptografar(data);
+      break;
+   case 'd':
+      printk(KERN_INFO "Crypto_aelpp: Lets decipher 2\n");
+      decrypt(data);
+      strncpy(message, dest1, strlen(dest1));
+      size_of_message = strlen(dest1);
+      printk(KERN_INFO "size len %i\n",size_of_message);
+      break;
+   case 'h':
+      printk(KERN_INFO "Crypto_aelpp: Lets hash\n");
+      ret = makeHash(data);
+      break;
+   }
 
-      case DECRYPT:
-         ret = crypto_skcipher_decrypt(sk->req);
-         ret = test_skcipher_result(sk, ret);
-         if (ret)
-            printk(KERN_INFO "Crypto_aelpp: Decryption request successful\n \n");
-         return ret;
+   return len;
+}
 
-      default:
-         return -1;
+static ssize_t dev_read(struct file *filep, char *buffer, size_t len, loff_t *offset)
+{
+   int error_count = 0;
+   // copy_to_user has the format ( * to, *from, size) and returns 0 on success
+   error_count = copy_to_user(buffer, message, size_of_message);
 
+   if (error_count == 0)
+   { // if true then have success
+      printk(KERN_INFO "Crypto_aelpp: Sent %d characters to the user\n", size_of_message);
+      return (size_of_message = 0); // clear the position to the start and return 0
+   }
+   else
+   {
+      printk(KERN_INFO "Crypto_aelpp: Failed to send %d characters to the user\n", error_count);
+      return -EFAULT; // Failed -- return a bad address message (i.e. -14)
    }
 }
 
-static int dev_release(struct inode *inodep, struct file *filep){
-   mutex_unlock(&ebbchar_mutex);                      // Releases the mutex (i.e., the lock goes up)
+static int dev_release(struct inode *inodep, struct file *filep)
+{
+   mutex_unlock(&ebbchar_mutex); // Releases the mutex (i.e., the lock goes up)
    printk(KERN_INFO "Crypto_aelpp: Device successfully closed\n");
    return 0;
 }
-
-
 
 module_init(crypto_aelpp_init);
 module_exit(crypto_aelpp_exit);
