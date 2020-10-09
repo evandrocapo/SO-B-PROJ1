@@ -53,8 +53,8 @@ struct scatterlist sg;
 
 char *vetor[2];
 
-static char *iv = "0123456789abcdef";
-static char *key = "0123456789abcdef";
+static char *iv = "";
+static char *key = "";
 size_t ivsize;
 
 void encrypt(char *buf);
@@ -208,9 +208,9 @@ static int makeHash(char *data)
 
 
    printk(KERN_INFO "Crypto_aelpp: sha1 Plaintext: %s\n", plaintext);
-   for (i = 0; i < SHA256_LENGTH; i++)
+   for (i = 0; i < SHA1_LENGTH; i++)
       sprintf(&str[i * 2], "%02x", (unsigned char)hash_sha1[i]);
-   str[i * 2] = 0;
+   str[i] = '\0';
    printk(KERN_INFO "Crypto_aelpp: sha1 Result: %s\n", str);
    strncpy(message, str, strlen(str));
    size_of_message = strlen(str);
